@@ -83,7 +83,7 @@ def test_load_vgg(load_vgg, tf_module):
 
 @test_safe
 def test_layers(layers):
-    num_classes = 2
+    num_classes = 3
     vgg_layer3_out = tf.placeholder(tf.float32, [None, None, None, 256])
     vgg_layer4_out = tf.placeholder(tf.float32, [None, None, None, 512])
     vgg_layer7_out = tf.placeholder(tf.float32, [None, None, None, 4096])
@@ -94,7 +94,7 @@ def test_layers(layers):
 
 @test_safe
 def test_optimize(optimize):
-    num_classes = 2
+    num_classes = 3
     shape = [2, 3, 4, num_classes]
     layers_output = tf.Variable(tf.zeros(shape))
     correct_label = tf.placeholder(tf.float32, [None, None, None, num_classes])

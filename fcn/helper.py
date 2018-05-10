@@ -64,6 +64,12 @@ def gen_batch_function(data_folder, image_shape):
     :param image_shape: Tuple - Shape of image
     :return:
     """
+    def filter_labels(gt_image):
+        gt_image[gt_image == 6] = 7
+        gt_image[np.isin(gt_image, [7,10], invert=True)] = 0
+        gt_image[490:,:,:][gt_image[490:,:,:] != 7] = 0
+        return gt_image
+
     def get_batches_fn(batch_size):
         """
         Create batches of training data
@@ -85,8 +91,11 @@ def gen_batch_function(data_folder, image_shape):
             for image_file in image_paths[batch_i:batch_i+batch_size]:
                 gt_image_file = label_paths[os.path.basename(image_file)]
 
-                image = scipy.misc.imresize(scipy.misc.imread(image_file), image_shape)
-                gt_image = scipy.misc.imresize(scipy.misc.imread(gt_image_file), image_shape)
+                #image = scipy.misc.imresize(scipy.misc.imread(image_file), image_shape)
+                image = scipy.misc.imread(image_file)[:image_shape[0],:image_shape[1],:]
+                #gt_image = scipy.misc.imresize(scipy.misc.imread(gt_image_file), image_shape)
+                gt_image = scipy.misc.imread(gt_image_file)[:image_shape[0],:image_shape[1],:]
+                gt_image = filter_labels(gt_image)
 
                 gt_bg = np.all(gt_image == background_color, axis=2)
                 gt_bg = gt_bg.reshape(*gt_bg.shape, 1)
@@ -120,14 +129,18 @@ def gen_test_output(sess, logits, keep_prob, image_pl, data_folder, image_shape)
         im_softmax = sess.run(
             [tf.nn.softmax(logits)],
             {keep_prob: 1.0, image_pl: [image]})
-        im_softmax = im_softmax[0][:, 1].reshape(image_shape[0], image_shape[1])
-        segmentation = (im_softmax > 0.5).reshape(image_shape[0], image_shape[1], 1)
-        mask = np.dot(segmentation, np.array([[0, 255, 0]]))
+        road_softmax = im_softmax[0][:, 1].reshape(image_shape[0], image_shape[1])
+        road_segmentation = (road_softmax > 0.5).reshape(image_shape[0], image_shape[1], 1)
+        road_mask = np.dot(road_segmentation, np.array([[7, 0, 0]]))
+        car_softmax = im_softmax[0][:, 2].reshape(image_shape[0], image_shape[1])
+        car_segmentation = (car_softmax > 0.5).reshape(image_shape[0], image_shape[1], 1)
+        car_mask = np.dot(car_segmentation, np.array([[10, 0, 0]]))
+        mask = np.maximum(road_mask, car_mask)
         mask = scipy.misc.toimage(mask, mode="RGB")
-        street_im = scipy.misc.toimage(image)
-        street_im.paste(mas, box=None, mask=mask)
+        #street_im = scipy.misc.toimage(image)
+        #street_im.paste(mask, box=None, mask=mask)
 
-        yield os.path.basename(image_file), np.array(street_im)
+        yield os.path.basename(image_file), np.array(mask)
 
 
 def save_inference_samples(runs_dir, data_dir, sess, image_shape, logits, keep_prob, input_image):
