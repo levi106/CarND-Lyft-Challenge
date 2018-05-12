@@ -1,5 +1,9 @@
 import os.path
+import shutil
+import zipfile
 import tensorflow as tf
+from tensorflow.python.tools import freeze_graph
+from tensorflow.python.tools import optimize_for_inference_lib
 from urllib.request import urlretrieve
 from tqdm import tqdm
 
@@ -17,9 +21,12 @@ class FCN():
     def __init__(self, num_classes):
         self.__num_classes = num_classes
         self.__model = {}
+        self.__base_dir = './fcn'
+        self.__checkpoint_path = os.path.join(self.__base_dir, 'variables/variables')
+        self.__graph_file = 'saved_model.pb'
+        self.__graph_path = os.path.join(self.__base_dir, self.__graph_file)
 
-
-    def train(self, get_batches_fn, epochs=10, batch_size=10, learning_rate=0.001, keep_prob=0.85, model_path=None):
+    def train(self, dataset, epochs=10, batch_size=10, learning_rate=0.001, keep_prob=0.85):
         params = {
             'epochs': epochs,
             'batch_size': batch_size,
@@ -27,19 +34,83 @@ class FCN():
             'keep_prob': keep_prob
         }
 
+        vgg_path = self.__maybe_download_pretrained_vgg()
+
         with tf.Session() as sess:
-            vgg_path = self.__maybe_download_pretrained_vgg()
             self.__model = self.__placeholder(self.__model, self.__num_classes)
             self.__model = self.__load_vgg(self.__model, sess, vgg_path)
             self.__model = self.__layers(self.__model, self.__num_classes)
             self.__model = self.__optimize(self.__model, self.__num_classes)
 
-            self.__train_nn(self.__model, sess, get_batches_fn, params)
+            self.__train_nn(self.__model, sess, dataset, params)
 
-            if model_path != None:
-                saver = tf.train.Saver()
-                saver.save(sess, model_path)
+            saver = tf.train.Saver()
+            saver.save(sess, self.__checkpoint_path)
+            g = sess.graph
+            tf.train.write_graph(g.as_graph_def(), self.__base_dir, self.__graph_file, as_text=False)
 
+    def save(self, output_graph):
+        input_graph = self.__graph_path
+        input_saver = ""
+        input_binary = True
+        input_checkpoint = self.__checkpoint_path
+        output_node_names = "logits"
+        restore_op_name = "save/restore_all"
+        filename_tensor_name = "save/Const:0"
+        clear_devices = True
+        output_frozen_graph = "frozen_fcn_model.pb"
+        initializer_nodes = ""
+        freeze_graph.freeze_graph(
+            input_graph,
+            input_saver,
+            input_binary,
+            input_checkpoint,
+            output_node_names,
+            restore_op_name,
+            filename_tensor_name,
+            output_frozen_graph,
+            clear_devices,
+            initializer_nodes
+        )
+
+        input_graph_def = tf.GraphDef()
+        with tf.gfile.Open(output_frozen_graph, "rb") as f:
+            data = f.read()
+            input_graph_def.ParseFromString(data)
+
+        output_graph_def = optimize_for_inference_lib.optimize_for_inference(
+            input_graph_def,
+            ["image_input", "keep_prob"],
+            ["logits"],
+            tf.float32.as_datatype_enum)
+        with tf.gfile.FastGFile(output_graph, "wb") as f:
+            f.write(output_graph_def.SerializeToString())
+
+    def load(self, graph_path):
+        self.__graph = tf.Graph()
+
+        with self.__graph.as_default():
+            graph_def = tf.GraphDef()
+            with tf.gfile.FastGFile(graph_path, 'rb') as f:
+                graph_def.ParseFromString(f.read())
+                tf.import_graph_def(graph_def, name='') 
+            self.__image_input = self.__graph.get_tensor_by_name('image_input:0')
+            self.__keep_prob = self.__graph.get_tensor_by_name('keep_prob:0')
+            self.__logits = self.__graph.get_tensor_by_name('logits:0')
+
+        self.__sess = tf.Session(graph=self.__graph)
+
+    def process(self, image):
+        with self.__graph.as_default():
+            im_softmax = self.__sess.run(
+                [tf.nn.softmax(self.__logits)],
+                {
+                    self.__keep_prob: 1.0,
+                    self.__image_input: [image]
+                }
+            )
+
+        return im_softmax
 
     def __maybe_download_pretrained_vgg(self, data_dir='./'):
         """
@@ -87,7 +158,7 @@ class FCN():
         correct_label = tf.placeholder(tf.float32, [None, None, None, num_classes])
         learning_rate = tf.placeholder(tf.float32)
 
-        model['current_label'] = current_label
+        model['correct_label'] = correct_label
         model['learning_rate'] = learning_rate
 
         return model
@@ -112,14 +183,14 @@ class FCN():
 
         model['image_input'] = image_input
         model['keep_prob'] = keep_prob
-        model['layer3_out'] = layer3_out
-        model['layer4_out'] = layer4_out
-        model['layer7_out'] = layer7_out
+        model['vgg_layer3_out'] = layer3_out
+        model['vgg_layer4_out'] = layer4_out
+        model['vgg_layer7_out'] = layer7_out
 
         return model
 
 
-    def __layers(self, model, num_classes)
+    def __layers(self, model, num_classes):
         """
         Create the layers for a fully convolutional network.  Build skip-layers using the vgg layers.
         """
@@ -141,6 +212,8 @@ class FCN():
         output = tf.layers.conv2d_transpose(output, num_classes, 4, 2, padding='same',
             kernel_regularizer=tf.contrib.layers.l2_regularizer(1e-3),
             kernel_initializer=tf.truncated_normal_initializer(stddev=0.01))
+        # The following code is very dependent on the shape of the input image.
+        output = output[:,0:-1,:,:]
         output = tf.add(output, layer3)
 
         output = tf.layers.conv2d_transpose(output, num_classes, 16, 8, padding='same',
@@ -156,7 +229,7 @@ class FCN():
         """
         Build the TensorFLow loss and optimizer operations.
         """
-        logits = tf.reshape(model['layers_output'], (-1, num_classes))
+        logits = tf.reshape(model['layers_output'], (-1, num_classes), name="logits")
         reg_losses = tf.get_collection(tf.GraphKeys.REGULARIZATION_LOSSES)
         cross_entropy_loss = tf.reduce_mean(tf.nn.softmax_cross_entropy_with_logits(logits=logits, labels=model['correct_label']))
         cross_entropy_loss += sum(reg_losses)
@@ -169,7 +242,7 @@ class FCN():
         return model
 
 
-    def __train_nn(self, model, sess, get_batches_fn, params):
+    def __train_nn(self, model, sess, dataset, params):
         """
         Train neural network and print out the loss during training.
         """
@@ -177,13 +250,13 @@ class FCN():
         epochs = params['epochs']
         batch_size = params['batch_size']
         keep_prob = params['keep_prob']
-        lr = param['learning_rate']
+        lr = params['learning_rate']
 
         sess.run(tf.global_variables_initializer())
         for epoch in range(epochs):
-            for batch_xs, batch_ys in get_batches_fn(batch_size):
+            for batch_xs, batch_ys in dataset.get_batches(batch_size):
                 feed_dict = {
-                    model['input_image']: batch_xs,
+                    model['image_input']: batch_xs,
                     model['correct_label']: batch_ys,
                     model['keep_prob']: keep_prob,
                     model['learning_rate']: lr
