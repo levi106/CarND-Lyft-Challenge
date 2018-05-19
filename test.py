@@ -20,12 +20,21 @@ def process_file(fcn, image_file, image_shape):
 
 def main():
     num_classes = 3
-    image_file = './data/Train/CameraRGB/999.png'
+    image_files = [
+        './data/Train/CameraRGB/53.png',
+        './data/Train/CameraRGB/102.png',
+        './data/Train/CameraRGB/382.png',
+        './data/Train/CameraRGB/720.png',
+        './data/Train/CameraRGB/999.png'
+    ]
     output_dir = './runs'
     fcn = FCN(num_classes)
     fcn.load('./frozen_fcn_model.pb')
-    name, image = process_file(fcn, image_file, (600, 800))
-    scipy.misc.imsave(os.path.join(output_dir, name), image)
+    for image_file in image_files:
+        print('{}'.format(image_file))
+        name, image = process_file(fcn, image_file, (600, 800))
+        scipy.misc.imsave(os.path.join(output_dir, name), image)
+    
 
 if __name__ == "__main__":
     main()

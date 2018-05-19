@@ -1,0 +1,4 @@
+tensorflow-gpu==1.8
+tqdm==4.11.2
+scipy==0.19.1
+scikit-image==0.13.1
