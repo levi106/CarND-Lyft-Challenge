@@ -12,6 +12,8 @@ class Dataset():
     def __init__(self, data_folder, image_shape):
         self.__data_folder = data_folder
         self.__image_shape = image_shape
+        self.__h = 32 * (self.__image_shape[0] // 32)
+        self.__w = 32 * (self.__image_shape[1] // 32)
 
     def __filter_labels(self, label_image):
         label_image[label_image == 6] = 7
@@ -55,5 +57,5 @@ class Dataset():
                 images.append(image)
                 gt_images.append(gt_image)
 
-            yield np.array(images), np.array(gt_images)
+            yield np.array(images)[:,:self.__h,:self.__w,:], np.array(gt_images)[:,:self.__h,:self.__w,:]
 
