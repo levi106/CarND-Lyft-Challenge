@@ -6,10 +6,11 @@ num_classes = 3
 lr = 0.001
 kp = 0.85
 batch_size = 10
-epochs = 20
+epochs = 25
 #epochs = 1
 base_dir = './fcn'
-graph_file = 'saved_model.pb'
+#graph_file = 'saved_model.pb'
+graph_file = './fcn/saved_model.pb'
 image_shape = (600, 800)
 data_dir = './data/Train'
 
@@ -50,6 +51,7 @@ def train(dataset):
             kernel_initializer=tf.truncated_normal_initializer(stddev=0.01))
 
         logits = tf.reshape(output, (-1, num_classes), name='logits')
+        softmax = tf.nn.softmax(logits, name='softmax')
         reg_loss = tf.get_collection(tf.GraphKeys.REGULARIZATION_LOSSES)
         cross_entropy_loss = tf.reduce_mean(tf.nn.softmax_cross_entropy_with_logits(logits=logits, labels=correct_label))
         cross_entropy_loss += sum(reg_loss)
@@ -73,8 +75,11 @@ def train(dataset):
                     print("Epoch:{} Iteration:{} Loss:{}".format(epoch, i, loss))
                 i += 1
 
-        g = tf.graph_util.convert_variables_to_constants(sess, sess.graph_def, ['logits'])
-        tf.train.write_graph(g, base_dir, graph_file, as_text=False)
+        frozen_graph = tf.graph_util.convert_variables_to_constants(sess, sess.graph_def, ['softmax'])
+        frozen_graph = tf.graph_util.remove_training_nodes(frozen_graph)
+        with tf.gfile.GFile(graph_file, 'wb') as f:
+            f.write(frozen_graph.SerializeToString())
+        #tf.train.write_graph(g, base_dir, graph_file, as_text=False)
 
 def main():
     dataset = Dataset(data_dir, image_shape)
